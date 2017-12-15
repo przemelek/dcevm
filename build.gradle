@@ -159,6 +159,171 @@ project('hotspot') {
     }
 }
 
+project('jdk9u') {
+    task clean(type: InvokeMake) {
+        onlyIf { file('hotspot/make').exists() }
+        args 'clean'
+    }
+
+    task prepareJvm {
+        onlyIf { jreFile.canonicalPath != targetJreFile.canonicalPath }
+        doLast {
+            // FIXME: We probably should check if source path is different and delete old JRE in that case
+            ant.copy(todir: targetJreFile, overwrite: true) {
+                fileset(dir: jreFile)
+            }
+            ant.chmod(file: new File(targetJreFile, 'bin/java'), perm: '0755')
+        }
+    }
+
+    task checkMercurial(description: 'Verify Mercurial is installed') {
+        doLast {
+            def os = new ByteArrayOutputStream()
+            try {
+                def result = exec {
+                    executable 'hg'
+                    args 'help', 'qinit'
+                    standardOutput = os
+                    errorOutput = os
+                    ignoreExitValue = true
+                }
+                if (result.getExitValue() != 0) {
+                    throw new GradleException("Mercurial does not have mq extension installed! Consult README.md for details.")
+                }
+            } catch (GradleException e) {
+                throw new GradleException("Failed to execute 'hg'. Make sure you have Mercurial installed!", e)
+            }
+        }
+    }
+
+    task clone(description: 'Pull OpenJDK HotSpot changes') { //todo: try to change to pull
+        outputs.upToDateWhen {
+            file('jdk9u/.hg/hgrc').exists()
+        }
+        doLast {
+            def hotspotRepository = 'http://hg.openjdk.java.net/jdk-updates/jdk9u'
+            exec {
+                executable 'hg'
+                workingDir '../'
+                args 'clone', hotspotRepository
+            }
+        }
+    }
+
+    task getSources(description: 'Get dependant sources, e.g. Hotspot', dependsOn: clone) {
+        doLast {
+            exec {
+                executable 'bash'
+                args 'get_source.sh'
+            }
+        }
+    }
+
+    task copyPatches(type: Copy, description: 'Copy existing patches to Hotspot source', dependsOn: getSources) {
+        from '../patches/'
+        into 'hotspot/.hg/patches/'
+    }
+
+    task patch(description: 'Patch HotSpot sources', dependsOn: copyPatches) {
+        def escapedTag = "'" + hotspotTag + "'"
+        doLast {
+            exec {
+                executable 'hg'
+                workingDir 'hotspot'
+                args 'qpop', '-a'
+                ignoreExitValue = true
+            }
+            exec {
+                executable 'hg'
+                workingDir 'hotspot'
+                args 'update', '-C', '-r', escapedTag
+            }
+            new ByteArrayOutputStream().withStream { os ->
+                exec {
+                    executable 'hg'
+                    workingDir 'hotspot'
+                    args 'status'
+                    standardOutput os
+                }
+                // Purge unversioned files
+                def str = os.toString()
+                def matcher = str =~ /(?m)^\?\s+(.*)$/
+                matcher.each {
+                    ant.delete(file: new File(file('jdk9u'), it[1]))
+                }
+            }
+            def guards = [flavor, 'jdk9', hotspotTag, flavor + '-' + hotspotTag]
+            exec {
+                executable 'hg'
+                workingDir 'hotspot'
+                args 'qselect'
+                args guards
+            }
+            exec {
+                executable 'hg'
+                workingDir 'hotspot'
+                args 'qpush', '-a'
+            }
+        }
+    }
+
+    task autoconfigure(description: 'Run autoconf for the first time', dependsOn: patch) {
+        doLast {
+            exec {
+                executable 'bash'
+                args 'configure'
+            }
+        }
+    }
+
+    def arguments = ['product'  : ['ENABLE_FULL_DEBUG_SYMBOLS=0'],
+                     'fastdebug': ['ENABLE_FULL_DEBUG_SYMBOLS=1', 'STRIP_POLICY=no_strip', 'ZIP_DEBUGINFO_FILES=0']]
+
+    ['product', 'fastdebug'].each { k ->
+        // Compile given kind of DCEVM
+        def compile = task("compile${k.capitalize()}", type: Exec) {
+            def root = project.rootProject
+            logging.captureStandardOutput LogLevel.INFO
+            if (root.os != Os.WINDOWS) {
+                commandLine 'make'
+            } else {
+                // Using launcher script
+                commandLine 'cmd', '/c', '..\\build.cmd'
+                environment ARCH: root.arch == Arch.X86 ? 'x86' : 'x64'
+            }
+            args 'OPENJDK=true'
+            args "HOTSPOT_BUILD_VERSION=dcevm${root.flavor}-${root.buildNumber}"
+            args "ARCH_DATA_MODEL=${root.arch.bits}"
+            args "ALT_BOOTDIR=${root.jre.replace('\\', '/')}/.."
+            // Replacing backslashes is essential for Windows!
+            args 'COMPILER_WARNINGS_FATAL=false' // Clang is very serious about warnings
+            args 'HOTSPOT_BUILD_JOBS=4'
+            args arguments[k]
+            args 'hotspot'
+            doLast {
+                ant.copy(todir: "build/${k}", overwrite: true) {
+                    fileset(dir: "build/${os.buildPath}/${os.buildPath}_${arch.buildArch}_${compiler}/${k}",
+                            includes: 'libjvm.so,libjsig.so,jvm.dll,jsig.dll,libjvm.dylib,libjsig.dylib')
+                }
+            }
+        }
+        compile.mustRunAfter(patch)
+
+        // Install given kind of DCEVM into destination JRE
+        task("install${k.capitalize()}", dependsOn: [prepareJvm, compile]) {
+            doLast {
+                def installPath = new File(new File(targetJreFile, arch == Arch.X86 ? os.installPath32 : os.installPath64), jvmName)
+
+                logger.info("Installing DCEVM runtime into JRE with JVM name '${jvmName}' and kind '${k}' at ${installPath}")
+                ant.copy(todir: installPath, overwrite: true) {
+                    fileset(dir: "build/${os.buildPath}/${os.buildPath}_${arch.buildArch}_${compiler}/${k}",
+                            includes: 'libjvm.so,libjsig.so,jvm.dll,jsig.dll,libjvm.dylib,libjsig.dylib')
+                }
+            }
+        }
+    }
+}
+
 configure([project(':agent'), project(':dcevm')]) {
     apply plugin: 'java'
     apply plugin: 'idea'
@@ -247,7 +412,7 @@ project('dcevm') {
     }
 
     test.dependsOn project(':native').tasks['compile']
-    test.dependsOn project(':hotspot').tasks[kind == 'fastdebug' ? 'installFastdebug' : 'installProduct']
+    test.dependsOn project(major == 9 ? ':jdk9u' : ':hotspot').tasks[kind == 'fastdebug' ? 'installFastdebug' : 'installProduct']
 }
 
 
