@@ -1,4 +1,4 @@
 # Change distribution name
-distro-name.patch
+# distro-name.patch
 
 light-jdk9.0.1+10.patch #jdk9.0.1+10
