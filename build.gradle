@@ -271,7 +271,7 @@ project('jdk9u') {
         doLast {
             exec {
                 executable 'bash'
-                args 'configure'
+                args 'configure', '--disable-warnings-as-errors'
             }
         }
     }
