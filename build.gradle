@@ -279,6 +279,9 @@ project('jdk9u') {
     def arguments = ['product'  : ['ENABLE_FULL_DEBUG_SYMBOLS=0'],
                      'fastdebug': ['ENABLE_FULL_DEBUG_SYMBOLS=1', 'STRIP_POLICY=no_strip', 'ZIP_DEBUGINFO_FILES=0']]
 
+    def variant = 'server'
+    def compile_type = 'release'
+
     ['product', 'fastdebug'].each { k ->
         // Compile given kind of DCEVM
         def compile = task("compile${k.capitalize()}", type: Exec) {
@@ -302,7 +305,7 @@ project('jdk9u') {
             args 'hotspot'
             doLast {
                 ant.copy(todir: "build/${k}", overwrite: true) {
-                    fileset(dir: "build/${os.buildPath}/${os.buildPath}_${arch.buildArch}_${compiler}/${k}",
+                    fileset(dir: "build/${os.buildPath}-${arch.buildArchJdk9}-normal-${variant}-${compile_type}/support/modules_libs/java.base/${variant}",
                             includes: 'libjvm.so,libjsig.so,jvm.dll,jsig.dll,libjvm.dylib,libjsig.dylib')
                 }
             }
@@ -312,11 +315,11 @@ project('jdk9u') {
         // Install given kind of DCEVM into destination JRE
         task("install${k.capitalize()}", dependsOn: [prepareJvm, compile]) {
             doLast {
-                def installPath = new File(new File(targetJreFile, arch == Arch.X86 ? os.installPath32 : os.installPath64), jvmName)
+                def installPath = new File(new File(targetJreFile, "lib"), jvmName)
 
                 logger.info("Installing DCEVM runtime into JRE with JVM name '${jvmName}' and kind '${k}' at ${installPath}")
                 ant.copy(todir: installPath, overwrite: true) {
-                    fileset(dir: "build/${os.buildPath}/${os.buildPath}_${arch.buildArch}_${compiler}/${k}",
+                    fileset(dir: "build/${os.buildPath}-${arch.buildArchJdk9}-normal-${variant}-${compile_type}/support/modules_libs/java.base/${variant}",
                             includes: 'libjvm.so,libjsig.so,jvm.dll,jsig.dll,libjvm.dylib,libjsig.dylib')
                 }
             }
@@ -347,19 +350,20 @@ project('native') {
         doFirst {
             buildDir.mkdirs()
         }
+        def includePath = "-I${jre}/" + (getJavaVersion() == 9 ? '' : '../' ) + "include"
         if (os != Os.WINDOWS) {
             commandLine 'gcc'
-            args "-I${jre}/../include"
+            args includePath
             args '-shared'
             args 'natives.c'
             if (os == Os.UNIX) {
-                args "-I${jre}/../include/linux"
+                args includePath + '/linux'
                 args '-fPIC'
                 args '-o'
                 args 'build/libnatives.so'
                 args(arch == Arch.X86 ? '-m32' : '-m64')
             } else if (os == Os.MAC) {
-                args "-I${jre}/../include/darwin"
+                args includePath + "/darwin"
                 args '-o'
                 args 'build/libnatives.dylib'
             }
@@ -374,7 +378,7 @@ project('native') {
 project('dcevm') {
     dependencies {
         compile project(':agent')
-        compile group: 'org.ow2.asm', name: 'asm-all', version: '5.0.2'
+        compile group: 'org.ow2.asm', name: 'asm-all', version: (getJavaVersion() == 9 ? '6.0_BETA' : '5.0.2')
         compile files(jre + '/../lib/tools.jar')
 
         testCompile group: 'junit', name: 'junit', version: '4.11'
@@ -394,9 +398,11 @@ project('dcevm') {
         systemProperty 'dcevm.test.light', (flavor == 'light')
 
         if (kind == 'fastdebug') {
-            jvmArgs '-XX:LogFile=build/hotspot.log'
+            //jvmArgs '-XX:LogFile=build/hotspot.log'
         }
         jvmArgs "-XXaltjvm=${jvmName}"
+        jvmArgs "-XX:+UnlockDiagnosticVMOptions"
+        jvmArgs "-XX:+UseSerialGC"
         jvmArgs '-javaagent:../agent/build/libs/agent.jar'
         if (arch == Arch.X86_64) {
             jvmArgs(project.oops == "compressed" ? '-XX:+UseCompressedOops' : "-XX:-UseCompressedOops")
@@ -417,16 +423,18 @@ project('dcevm') {
 
 
 enum Arch {
-    X86(["i386", "i486", "i586", "x86"], 'i486', 32),
-    X86_64(["x86_64", "x64", "amd64"], 'amd64', 64)
+    X86(["i386", "i486", "i586", "x86"], 'i486', 'x86', 32),
+    X86_64(["x86_64", "x64", "amd64"], 'amd64', 'x86_64', 64)
 
     final List<String> names
     final String buildArch
+    final buildArchJdk9
     final int bits
 
-    Arch(List<String> names, String buildArch, int bits) {
+    Arch(List<String> names, String buildArch, String buildArchJdk9, int bits) {
         this.names = names
         this.buildArch = buildArch
+        this.buildArchJdk9 = buildArchJdk9
         this.bits = bits
     }
 
