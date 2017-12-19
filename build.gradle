@@ -378,7 +378,8 @@ project('native') {
 project('dcevm') {
     dependencies {
         compile project(':agent')
-        compile group: 'org.ow2.asm', name: 'asm-all', version: (getJavaVersion() == 9 ? '6.0_BETA' : '5.0.2')
+        compile group: 'org.ow2.asm', name: 'asm', version: (getJavaVersion() == 9 ? '6.0' : '5.0.2')
+        compile group: 'org.ow2.asm', name: 'asm-commons', version:  (getJavaVersion() == 9 ? '6.0' : '5.0.2')
         compile files(jre + '/../lib/tools.jar')
 
         testCompile group: 'junit', name: 'junit', version: '4.11'
