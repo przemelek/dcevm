@@ -54,7 +54,17 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/ci/ciObjectFactory.hpp
 diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
 --- a/src/share/vm/classfile/classFileParser.cpp	Wed Sep 27 17:36:28 2017 -0700
 +++ b/src/share/vm/classfile/classFileParser.cpp	Fri Dec 15 05:23:25 2017 -0500
-@@ -822,6 +822,7 @@
+
+@@ -105,6 +105,8 @@
+
+ #define JAVA_9_VERSION                    53
+
++#define POST_PROCESSING_SKIP              1
++#define POST_PROCESSING_DO                0
+ void ClassFileParser::set_class_bad_constant_seen(short bad_constant) {
+   assert((bad_constant == 19 || bad_constant == 20) && _major_version >= JAVA_9_VERSION,
+          "Unexpected bad constant pool entry");
+@@ -822,6 +824,7 @@
  void ClassFileParser::parse_interfaces(const ClassFileStream* const stream,
                                         const int itfs_len,
                                         ConstantPool* const cp,
@@ -62,7 +72,7 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
                                         bool* const has_nonstatic_concrete_methods,
                                         TRAPS) {
    assert(stream != NULL, "invariant");
-@@ -843,7 +844,11 @@
+@@ -843,7 +846,11 @@
          "Interface name has bad constant pool index %u in class file %s",
          interface_index, CHECK);
        if (cp->tag_at(interface_index).is_klass()) {
@@ -74,10 +84,10 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
 +                interf = KlassHandle(THREAD, resolved_klass);
        } else {
          Symbol* const unresolved_klass  = cp->klass_name_at(interface_index);
- 
-@@ -853,13 +858,16 @@
+
+@@ -853,13 +860,16 @@
                             "Bad interface name in class file %s", CHECK);
- 
+
          // Call resolve_super so classcircularity is checked
 -        const Klass* const k =
 +        const Klass* k =
@@ -92,17 +102,17 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
 +                }
          interf = KlassHandle(THREAD, k);
        }
- 
-@@ -3539,7 +3547,7 @@
+
+@@ -3539,7 +3549,7 @@
  }
- 
+
  const InstanceKlass* ClassFileParser::parse_super_class(ConstantPool* const cp,
 -                                                        const int super_class_index,
 +                                                        const int super_class_index, bool pick_newest,
                                                          const bool need_verify,
                                                          TRAPS) {
    assert(cp != NULL, "invariant");
-@@ -3559,7 +3567,11 @@
+@@ -3559,7 +3569,11 @@
      // However, make sure it is not an array type.
      bool is_array = false;
      if (cp->tag_at(super_class_index).is_klass()) {
@@ -115,20 +125,19 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
        if (need_verify)
          is_array = super_klass->is_array_klass();
      } else if (need_verify) {
-@@ -4229,9 +4241,11 @@
+@@ -4229,7 +4243,9 @@
    if (!_has_empty_finalizer) {
      if (_has_finalizer ||
          (super != NULL && super->has_finalizer())) {
+-      ik->set_has_finalizer();
 +        if (_old_klass.is_null() || _old_klass->has_finalizer()) {
-       ik->set_has_finalizer();
++            ik->set_has_finalizer();
++        }
      }
    }
-+  }
- 
- #ifdef ASSERT
-   bool f = false;
-@@ -4251,7 +4265,7 @@
- 
+
+@@ -4251,7 +4267,7 @@
+
    // Check if this klass supports the java.lang.Cloneable interface
    if (SystemDictionary::Cloneable_klass_loaded()) {
 -    if (ik->is_subtype_of(SystemDictionary::Cloneable_klass())) {
@@ -136,16 +145,20 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
        ik->set_is_cloneable();
      }
    }
-@@ -5259,7 +5273,7 @@
+@@ -5255,7 +5272,11 @@
+   if (_klass != NULL) {
+     return _klass;
+   }
+-
++
++  if(!_was_fully_parsed) {
++      return NULL;
++  }
++
    InstanceKlass* const ik =
      InstanceKlass::allocate_instance_klass(*this, CHECK_NULL);
- 
--  fill_instance_klass(ik, changed_by_loadhook, CHECK_NULL);
-+  fill_instance_klass(ik, changed_by_loadhook, CHECK_NULL); //todo: dolozyc pole ktore w JDK8 jest w metodzie parseClassFile
- 
-   assert(_klass == ik, "invariant");
- 
-@@ -5559,7 +5573,9 @@
+
+@@ -5559,7 +5580,9 @@
                                   ClassLoaderData* loader_data,
                                   Handle protection_domain,
                                   const InstanceKlass* host_klass,
@@ -155,7 +168,7 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
                                   Publicity pub_level,
                                   TRAPS) :
    _stream(stream),
-@@ -5567,6 +5583,8 @@
+@@ -5567,6 +5590,8 @@
    _loader_data(loader_data),
    _host_klass(host_klass),
    _cp_patches(cp_patches),
@@ -164,18 +177,126 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
    _super_klass(),
    _cp(NULL),
    _fields(NULL),
-@@ -5725,6 +5743,7 @@
+@@ -5613,6 +5638,7 @@
+   _has_finalizer(false),
+   _has_empty_finalizer(false),
+   _has_vanilla_constructor(false),
++  _was_fully_parsed(false),
+   _max_bootstrap_specifier_index(-1) {
+
+   _class_name = name != NULL ? name : vmSymbols::unknown_class_name();
+@@ -5645,9 +5671,12 @@
+   // Do not restrict it to jdk1.0 or jdk1.1 to maintain backward compatibility (4982376)
+   _relax_verify = relax_format_check_for(_loader_data);
+
+-  parse_stream(stream, CHECK);
+-
+-  post_process_parsed_stream(stream, _cp, CHECK);
++  int should_post_process = parse_stream(stream, CHECK);
++
++  if (should_post_process == POST_PROCESSING_DO) {
++    _was_fully_parsed = true;
++    post_process_parsed_stream(stream, _cp, CHECK);
++  }
+ }
+
+ void ClassFileParser::clear_class_metadata() {
+@@ -5719,19 +5748,20 @@
+   }
+ }
+
+-void ClassFileParser::parse_stream(const ClassFileStream* const stream,
++int ClassFileParser::parse_stream(const ClassFileStream* const stream,
+                                    TRAPS) {
+
    assert(stream != NULL, "invariant");
    assert(_class_name != NULL, "invariant");
- 
+
 +  bool pick_newest = !_old_klass.is_null();
    // BEGIN STREAM PARSING
-   stream->guarantee_more(8, CHECK);  // magic, major, minor
+-  stream->guarantee_more(8, CHECK);  // magic, major, minor
++  stream->guarantee_more(8, CHECK_(POST_PROCESSING_SKIP));  // magic, major, minor
    // Magic value
-@@ -5834,6 +5853,25 @@
-                        CHECK);
+   const u4 magic = stream->get_u4_fast();
+   guarantee_property(magic == JAVA_CLASSFILE_MAGIC,
+                      "Incompatible magic value %u in class file %s",
+-                     magic, CHECK);
++                     magic, CHECK_(POST_PROCESSING_SKIP));
+
+   // Version numbers
+   _minor_version = stream->get_u2_fast();
+@@ -5762,28 +5792,28 @@
+       _minor_version,
+       JAVA_MAX_SUPPORTED_VERSION,
+       JAVA_MAX_SUPPORTED_MINOR_VERSION);
+-    return;
+-  }
+-
+-  stream->guarantee_more(3, CHECK); // length, first cp tag
++    return POST_PROCESSING_SKIP;
++  }
++
++  stream->guarantee_more(3, CHECK_(POST_PROCESSING_SKIP)); // length, first cp tag
+   const u2 cp_size = stream->get_u2_fast();
+
+   guarantee_property(
+     cp_size >= 1, "Illegal constant pool size %u in class file %s",
+-    cp_size, CHECK);
++    cp_size, CHECK_(POST_PROCESSING_SKIP));
+
+   _cp = ConstantPool::allocate(_loader_data,
+                                cp_size,
+-                               CHECK);
++                               CHECK_(POST_PROCESSING_SKIP));
+
+   ConstantPool* const cp = _cp;
+
+-  parse_constant_pool(stream, cp, cp_size, CHECK);
++  parse_constant_pool(stream, cp, cp_size, CHECK_(POST_PROCESSING_SKIP));
+
+   assert(cp_size == (const u2)cp->length(), "invariant");
+
+   // ACCESS FLAGS
+-  stream->guarantee_more(8, CHECK);  // flags, this_class, super_class, infs_len
++  stream->guarantee_more(8, CHECK_(POST_PROCESSING_SKIP));  // flags, this_class, super_class, infs_len
+
+   // Access flags
+   jint flags;
+@@ -5799,13 +5829,13 @@
+     flags |= JVM_ACC_ABSTRACT;
    }
- 
+
+-  verify_legal_class_modifiers(flags, CHECK);
++  verify_legal_class_modifiers(flags, CHECK_(POST_PROCESSING_SKIP));
+
+   short bad_constant = class_bad_constant_seen();
+   if (bad_constant != 0) {
+     // Do not throw CFE until after the access_flags are checked because if
+     // ACC_MODULE is set in the access flags, then NCDFE must be thrown, not CFE.
+-    classfile_parse_error("Unknown constant tag %u in class file %s", bad_constant, CHECK);
++    classfile_parse_error("Unknown constant tag %u in class file %s", bad_constant, CHECK_(POST_PROCESSING_SKIP));
+   }
+
+   _access_flags.set_flags(flags);
+@@ -5816,7 +5846,7 @@
+     valid_cp_range(_this_class_index, cp_size) &&
+       cp->tag_at(_this_class_index).is_unresolved_klass(),
+     "Invalid this class index %u in constant pool in class file %s",
+-    _this_class_index, CHECK);
++    _this_class_index, CHECK_(POST_PROCESSING_SKIP));
+
+   Symbol* const class_name_in_cp = cp->klass_name_at(_this_class_index);
+   assert(class_name_in_cp != NULL, "class_name can't be null");
+@@ -5831,9 +5861,28 @@
+   if (_need_verify) {
+     guarantee_property(_class_name->byte_at(0) != JVM_SIGNATURE_ARRAY,
+                        "Bad class name in class file %s",
+-                       CHECK);
+-  }
+-
++                       CHECK_(POST_PROCESSING_SKIP));
++  }
++
 +  // (DCEVM) Do not parse full class file, only get super symbols and return.
 +    if (_parsed_super_symbols != NULL) {
 +        u2 super_class_index = stream->get_u2_fast();
@@ -186,26 +307,44 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
 +
 +        // Interfaces
 +        u2 itfs_len = stream->get_u2_fast();
-+        parse_interfaces(stream, itfs_len, cp, pick_newest, &_has_nonstatic_concrete_methods, CHECK);
++        parse_interfaces(stream, itfs_len, cp, pick_newest, &_has_nonstatic_concrete_methods, CHECK_(POST_PROCESSING_SKIP));
 +
 +        for (int i = 0; i < _local_interfaces->length(); i++) {
 +            Klass* o = _local_interfaces->at(i);
 +            _parsed_super_symbols->append(o->name());
 +        }
-+        return;
++        return POST_PROCESSING_SKIP;
 +    }
-+  
++
    // Checks if name in class file matches requested name
    if (_requested_name != NULL && _requested_name != _class_name) {
      ResourceMark rm(THREAD);
-@@ -5900,14 +5938,14 @@
+@@ -5844,14 +5893,14 @@
+       _class_name->as_C_string(),
+       _requested_name != NULL ? _requested_name->as_C_string() : "NoName"
+     );
+-    return;
++    return POST_PROCESSING_SKIP;
+   }
+
+   // if this is an anonymous class fix up its name if it's in the unnamed
+   // package.  Otherwise, throw IAE if it is in a different package than
+   // its host class.
+   if (_host_klass != NULL) {
+-    fix_anonymous_class_name(CHECK);
++    fix_anonymous_class_name(CHECK_(POST_PROCESSING_SKIP));
+   }
+
+   // Verification prevents us from creating names with dots in them, this
+@@ -5900,16 +5949,16 @@
    _super_class_index = stream->get_u2_fast();
    _super_klass = parse_super_class(cp,
                                     _super_class_index,
 -                                   _need_verify,
+-                                   CHECK);
 +                                   _need_verify, pick_newest,
-                                    CHECK);
- 
++                                   CHECK_(POST_PROCESSING_SKIP));
+
    // Interfaces
    _itfs_len = stream->get_u2_fast();
    parse_interfaces(stream,
@@ -213,32 +352,88 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.cpp
 -                   cp,
 +                   cp, pick_newest,
                     &_has_nonstatic_concrete_methods,
-                    CHECK);
- 
-@@ -5991,6 +6029,10 @@
+-                   CHECK);
++                   CHECK_(POST_PROCESSING_SKIP));
+
+   assert(_local_interfaces != NULL, "invariant");
+
+@@ -5921,7 +5970,7 @@
+                cp,
+                cp_size,
+                &_java_fields_count,
+-               CHECK);
++               CHECK_(POST_PROCESSING_SKIP));
+
+   assert(_fields != NULL, "invariant");
+
+@@ -5932,7 +5981,7 @@
+                 &promoted_flags,
+                 &_has_final_method,
+                 &_declares_nonstatic_concrete_methods,
+-                CHECK);
++                CHECK_(POST_PROCESSING_SKIP));
+
+   assert(_methods != NULL, "invariant");
+
+@@ -5945,20 +5994,21 @@
+
+   // Additional attributes/annotations
+   _parsed_annotations = new ClassAnnotationCollector();
+-  parse_classfile_attributes(stream, cp, _parsed_annotations, CHECK);
++  parse_classfile_attributes(stream, cp, _parsed_annotations, CHECK_(POST_PROCESSING_SKIP));
+
+   assert(_inner_classes != NULL, "invariant");
+
+   // Finalize the Annotations metadata object,
+   // now that all annotation arrays have been created.
+-  create_combined_annotations(CHECK);
++  create_combined_annotations(CHECK_(POST_PROCESSING_SKIP));
+
+   // Make sure this is the end of class file stream
+   guarantee_property(stream->at_eos(),
+                      "Extra bytes at the end of class file %s",
+-                     CHECK);
++                     CHECK_(POST_PROCESSING_SKIP));
+
+   // all bytes in stream read and parsed
++  return POST_PROCESSING_DO;
+ }
+
+ void ClassFileParser::post_process_parsed_stream(const ClassFileStream* const stream,
+@@ -5991,6 +6041,10 @@
                                                                 _protection_domain,
                                                                 true,
                                                                 CHECK);
 +    bool pick_newest = !_old_klass.is_null();
-+    if (pick_newest) {
++    if (pick_newest && _super_klass != NULL) {
 +            _super_klass = (const InstanceKlass*) _super_klass->newest_version();
-+  }
++        }
    }
- 
+
    if (_super_klass != NULL) {
 diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.hpp
 --- a/src/share/vm/classfile/classFileParser.hpp	Wed Sep 27 17:36:28 2017 -0700
 +++ b/src/share/vm/classfile/classFileParser.hpp	Fri Dec 15 05:23:25 2017 -0500
-@@ -80,6 +80,8 @@
+@@ -80,6 +80,9 @@
    Symbol* _class_name;
    mutable ClassLoaderData* _loader_data;
    const InstanceKlass* _host_klass;
 +  const KlassHandle _old_klass;
 +  GrowableArray<Symbol*>* _parsed_super_symbols;
++  bool _was_fully_parsed; //(DCEVM) store if everything was parsed
    GrowableArray<Handle>* _cp_patches; // overrides for CP entries
- 
+
    // Metadata created before the instance klass is created.  Must be deallocated
-@@ -196,12 +198,12 @@
+@@ -158,7 +161,7 @@
+   bool _has_vanilla_constructor;
+   int _max_bootstrap_specifier_index;  // detects BSS values
+
+-  void parse_stream(const ClassFileStream* const stream, TRAPS);
++  int parse_stream(const ClassFileStream* const stream, TRAPS);
+
+   void post_process_parsed_stream(const ClassFileStream* const stream,
+                                   ConstantPool* cp,
+@@ -196,12 +199,12 @@
    // Interface parsing
    void parse_interfaces(const ClassFileStream* const stream,
                          const int itfs_len,
@@ -246,14 +441,14 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.hpp
 +                        ConstantPool* const cp, bool pick_newest,
                          bool* has_nonstatic_concrete_methods,
                          TRAPS);
- 
+
    const InstanceKlass* parse_super_class(ConstantPool* const cp,
 -                                         const int super_class_index,
 +                                         const int super_class_index, bool pick_newest,
                                           const bool need_verify,
                                           TRAPS);
- 
-@@ -489,7 +491,9 @@
+
+@@ -489,7 +492,9 @@
                    ClassLoaderData* loader_data,
                    Handle protection_domain,
                    const InstanceKlass* host_klass,
@@ -262,7 +457,16 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classFileParser.hpp
 +                  GrowableArray<Symbol*>* parsed_super_symbols,
                    Publicity pub_level,
                    TRAPS);
- 
+
+@@ -526,7 +531,7 @@
+   bool is_internal() const { return INTERNAL == _pub_level; }
+
+   static bool verify_unqualified_name(const char* name, unsigned int length, int type);
+-
++
+ #ifdef ASSERT
+   static bool is_internal_format(Symbol* class_name);
+ #endif
 diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/classfile/classLoader.cpp
 --- a/src/share/vm/classfile/classLoader.cpp	Wed Sep 27 17:36:28 2017 -0700
 +++ b/src/share/vm/classfile/classLoader.cpp	Fri Dec 15 05:23:25 2017 -0500
