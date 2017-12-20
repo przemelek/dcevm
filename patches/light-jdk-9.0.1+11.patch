@@ -2570,7 +2570,7 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/prims/jvmtiImpl.cpp
 diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/prims/jvmtiRedefineClasses2.cpp
 --- /dev/null	Thu Jan 01 00:00:00 1970 +0000
 +++ b/src/share/vm/prims/jvmtiRedefineClasses2.cpp	Fri Dec 15 05:23:25 2017 -0500
-@@ -0,0 +1,2156 @@
+@@ -0,0 +1,2149 @@
 +/*
 + * Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
 + * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -2759,13 +2759,7 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/prims/jvmtiRedefineClasses2.cp
 +    if (the_class->get_cached_class_file_bytes() == NULL) {
 +      // not cached, we need to reconstitute the class file from VM representation
 +      constantPoolHandle  constants(Thread::current(), the_class->constants());
-+      objArrayHandle resolved_references = constants->resolved_references();
-+            // Use the resolved_references() lock for this cpCache entry.
-+            // resolved_references are created for all classes with Invokedynamic, MethodHandle
-+            // or MethodType constant pool cache entries.
-+            assert(resolved_references() != NULL,
-+                    "a resolved_references array should have been created for this class");
-+            ObjectLocker ol(resolved_references, Thread::current()); //DCEVM: see cpCache for sample
++      ObjectLocker ol(Handle(THREAD, constants), Thread::current());
 +
 +      JvmtiClassFileReconstituter reconstituter(the_class);
 +      if (reconstituter.get_error() != JVMTI_ERROR_NONE) {
