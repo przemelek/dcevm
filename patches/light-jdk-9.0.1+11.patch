@@ -2111,7 +2111,7 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/oops/instanceKlass.cpp
 +}
 +
 +void InstanceKlass::clear_update_information() {
-+  FREE_C_HEAP_ARRAY(update_information(), mtClass);
++  FREE_C_HEAP_ARRAY(mtClass, update_information());
 +  set_update_information(NULL);
 +}
  
@@ -2758,8 +2758,6 @@ diff -r 5be37d3ef648 -r bf6d41e48c32 src/share/vm/prims/jvmtiRedefineClasses2.cp
 +
 +    if (the_class->get_cached_class_file_bytes() == NULL) {
 +      // not cached, we need to reconstitute the class file from VM representation
-+      constantPoolHandle  constants(Thread::current(), the_class->constants());
-+      ObjectLocker ol(Handle(THREAD, constants), Thread::current());
 +
 +      JvmtiClassFileReconstituter reconstituter(the_class);
 +      if (reconstituter.get_error() != JVMTI_ERROR_NONE) {
