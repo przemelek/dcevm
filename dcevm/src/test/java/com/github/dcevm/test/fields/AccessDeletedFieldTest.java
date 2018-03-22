@@ -32,6 +32,7 @@ import org.junit.experimental.categories.Category;
 import static com.github.dcevm.test.util.HotSwapTestHelper.__toVersion__;
 import static com.github.dcevm.test.util.HotSwapTestHelper.__version__;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for accessing a deleted field. In the first scenario, the field is deleted from the class.
@@ -106,7 +107,14 @@ public class AccessDeletedFieldTest {
 
     assertEquals(1, a.x);
 
+    int prevVersion = TestUtil.getClassRedefinedCount(A.class);
+
     __toVersion__(1);
+
+    int nextVersion = TestUtil.getClassRedefinedCount(A.class);
+
+    assertTrue(nextVersion > prevVersion);
+    assertEquals(prevVersion+1,nextVersion);
 
     TestUtil.assertException(NoSuchFieldError.class, new Runnable() {
       @Override
